@@ -559,7 +559,6 @@ class ChatService:
                 # 将图片结果转回 chat 标准输出格式
                 content = ""
                 for img_data in image_results:
-                    import uuid
                     img_id = str(uuid.uuid4())[:8]
                     if img_data.startswith("http") or img_data.startswith("/v1/files"):
                         content += f"![{img_id}]({img_data})\n"
