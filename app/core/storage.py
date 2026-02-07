@@ -14,7 +14,10 @@ import os
 import asyncio
 import hashlib
 import time
-import tomllib
+try:
+    import tomllib  # Python 3.11+
+except ImportError:
+    import tomli as tomllib  # Python 3.10 及以下
 from typing import Any, Dict, Optional
 from pathlib import Path
 from enum import Enum
