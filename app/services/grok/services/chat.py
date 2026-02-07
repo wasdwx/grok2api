@@ -2,6 +2,7 @@
 Grok Chat 服务
 """
 
+import time
 import orjson
 from typing import Dict, List, Any
 from dataclasses import dataclass
@@ -22,7 +23,10 @@ from app.services.grok.processors import StreamProcessor, CollectProcessor
 from app.services.grok.utils.retry import retry_on_status
 from app.services.grok.utils.headers import apply_statsig, build_sso_cookie
 from app.services.grok.utils.stream import wrap_stream_with_usage
-from app.services.token import get_token_manager, EffortType
+from app.services.token import get_token_manager, EffortType, TokenManager
+
+from app.services.grok.services.image import image_service
+from app.services.grok.processors.image_ws_processors import ImageWSStreamProcessor, ImageWSCollectProcessor
 
 
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
@@ -412,6 +416,12 @@ class ChatService:
 
         # 请求 Grok
         service = GrokChatService()
+        
+        # 特殊处理 grok-imagine-1.0
+        model_info = ModelService.get(model)
+        if model_info and model_info.is_image and model == "grok-imagine-1.0":
+            return await ChatService.generate_image(model, is_stream, token, messages, token_mgr)
+
         response, _, model_name = await service.chat_openai(token, chat_request)
 
         # 处理响应
@@ -437,6 +447,145 @@ class ChatService:
         except Exception as e:
             logger.warning(f"Failed to record usage: {e}")
         return result
+    
+    @staticmethod
+    async def generate_image(model: str, is_stream: bool, token: str, messages: List[str], token_mgr: TokenManager):
+        # 提取提示词
+            message, _ = MessageExtractor.extract(messages)
+            
+            # 调用图片服务
+            image_gen = image_service.stream(token, message)
+            
+            if is_stream:
+                logger.debug(f"Processing image stream response: model={model}")
+                # 强制使用 url 格式以便处理
+                image_format = get_config("app.image_format")
+                processor = ImageWSStreamProcessor(model, token, response_format=image_format)
+                
+                async def chat_stream_wrapper():
+                    # 先发送 role
+                    role_chunk = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": ""},
+                                "finish_reason": None
+                            }
+                        ]
+                    }
+                    yield f"data: {orjson.dumps(role_chunk).decode()}\n\n"
+
+                    async for sse_msg in processor.process(image_gen):
+                        if sse_msg.startswith("event: image_generation.completed"):
+                            # 提取 b64_json 或 url 并包装成 chat.completion.chunk
+                            try:
+                                data_str = sse_msg.split("data: ", 1)[1].strip()
+                                data = orjson.loads(data_str)
+                                
+                                content = ""
+                                if b64 := data.get("b64_json"):
+                                    img_id = str(uuid.uuid4())[:8]
+                                    content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+                                elif url := data.get("url"):
+                                    img_id = str(uuid.uuid4())[:8]
+                                    content = f"![{img_id}]({url})\n"
+                                
+                                if content:
+                                    chunk = {
+                                        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                                        "object": "chat.completion.chunk",
+                                        "created": int(time.time()),
+                                        "model": model,
+                                        "choices": [
+                                            {
+                                                "index": 0,
+                                                "delta": {"content": content},
+                                                "finish_reason": None
+                                            }
+                                        ]
+                                    }
+                                    yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                            except Exception as e:
+                                logger.warning(f"Failed to process image SSE: {e}")
+                        elif sse_msg.startswith("event: image_generation.partial_image"):
+                            # 可选：处理进度显示
+                            pass
+                        elif sse_msg.startswith("event: error"):
+                            yield sse_msg
+                    
+                    # 发送结束标记
+                    final_chunk = {
+                        "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }
+                        ]
+                    }
+                    yield f"data: {orjson.dumps(final_chunk).decode()}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                return wrap_stream_with_usage(
+                    chat_stream_wrapper(), token_mgr, token, model
+                )
+            else:
+                logger.debug(f"Processing image collect response: model={model}")
+                image_format = get_config("app.image_format")
+                processor = ImageWSCollectProcessor(model, token, response_format=image_format)
+                image_results = await processor.process(image_gen)
+                
+                # 将图片结果转回 chat 标准输出格式
+                content = ""
+                for img_data in image_results:
+                    import uuid
+                    img_id = str(uuid.uuid4())[:8]
+                    if img_data.startswith("http") or img_data.startswith("/v1/files"):
+                        content += f"![{img_id}]({img_data})\n"
+                    else:
+                        # 假设是 base64
+                        content += f"![{img_id}](data:image/jpeg;base64,{img_data})\n"
+                
+                # 构造类似 CollectProcessor 的返回结构
+                result = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": content.strip(),
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 0,
+                        "completion_tokens": 0,
+                        "total_tokens": 0,
+                    }
+                }
+                
+                # 记录消耗
+                try:
+                    effort = EffortType.HIGH
+                    await token_mgr.consume(token, effort)
+                    logger.info(f"Image chat completed: model={model}, effort={effort.value}")
+                except Exception as e:
+                    logger.warning(f"Failed to record usage: {e}")
+                
+                return result
 
 
 __all__ = [
