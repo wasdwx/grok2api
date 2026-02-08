@@ -146,6 +146,10 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             if not image_id:
                 continue
 
+            # 统一 is_final 标记
+            if item.get("stage") == "final":
+                item["is_final"] = True
+
             if self.n == 1:
                 if self._target_id is None:
                     self._target_id = image_id
@@ -245,6 +249,11 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
             image_id = item.get("image_id")
             if not image_id:
                 continue
+            
+            # 统一 is_final 标记
+            if item.get("stage") == "final":
+                item["is_final"] = True
+                
             images[image_id] = self._pick_best(images.get(image_id), item)
 
         selected = sorted(
