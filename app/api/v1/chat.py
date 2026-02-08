@@ -111,7 +111,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[MessageItem] = Field(..., description="消息数组")
     stream: Optional[bool] = Field(False, description="是否流式输出")
     thinking: Optional[str] = Field(None, description="思考模式: enabled/disabled/None")
-    n: Optional[int] = Field(1, description="生成数量")
+    n: Optional[int] = Field(1, description="生成数量", le=5)
 
     # 视频生成配置
     video_config: Optional[VideoConfig] = Field(None, description="视频生成参数")
