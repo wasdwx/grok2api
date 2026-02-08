@@ -2,6 +2,7 @@
 Grok Chat 服务
 """
 
+import re
 import time
 import uuid
 import orjson
@@ -29,6 +30,8 @@ from app.services.token import get_token_manager, EffortType, TokenManager
 from app.services.grok.services.image import image_service
 from app.services.grok.processors.image_ws_processors import ImageWSStreamProcessor, ImageWSCollectProcessor
 
+from app.services.grok.services.media import VideoService
+from app.services.grok.processors import ImageStreamProcessor, ImageCollectProcessor
 
 CHAT_API = "https://grok.com/rest/app-chat/conversations/new"
 
@@ -420,8 +423,11 @@ class ChatService:
         
         # 特殊处理 grok-imagine-1.0
         model_info = ModelService.get(model)
-        if model_info and model_info.is_image and model == "grok-imagine-1.0":
-            return await ChatService.generate_image(model, is_stream, token, messages, token_mgr)
+        if model_info and model_info.is_image:
+            if model == "grok-imagine-1.0":
+                return await ChatService.generate_image(model, is_stream, token, messages, token_mgr)
+            elif model == "grok-imagine-1.0-edit":
+                return await ChatService.edit_image(model, is_stream, token, messages, token_mgr)
 
         response, _, model_name = await service.chat_openai(token, chat_request)
 
@@ -598,6 +604,225 @@ class ChatService:
                     logger.warning(f"Failed to record usage: {e}")
                 
                 return result
+
+    @staticmethod
+    async def edit_image(model: str, is_stream: bool, token: str, messages: List[Dict[str, Any]], token_mgr: TokenManager):
+        """图片编辑处理函数"""
+
+        # 1. 提取提示词和附件
+        prompt, attachments = MessageExtractor.extract(messages)
+        
+        # 2. 上传图片并获取 URL
+        image_urls: List[str] = []
+        upload_service = UploadService()
+        try:
+            for attach_type, attach_data in attachments:
+                if attach_type == "image":
+                    file_id, file_uri = await upload_service.upload(attach_data, token)
+                    if file_uri:
+                        if file_uri.startswith("http"):
+                            image_urls.append(file_uri)
+                        else:
+                            image_urls.append(f"https://assets.grok.com/{file_uri.lstrip('/')}")
+        finally:
+            await upload_service.close()
+
+        if not image_urls:
+            raise ValidationException("No image provided for editing")
+
+        # 3. 创建图片帖子以获取 parentPostId
+        parent_post_id = None
+        try:
+            media_service = VideoService()
+            parent_post_id = await media_service.create_image_post(token, image_urls[0])
+        except Exception as e:
+            logger.warning(f"Create image post failed: {e}")
+
+        if not parent_post_id:
+            for url in image_urls:
+                match = re.search(r"/generated/([a-f0-9-]+)/", url)
+                if match:
+                    parent_post_id = match.group(1)
+                    break
+                match = re.search(r"/users/[^/]+/([a-f0-9-]+)/content", url)
+                if match:
+                    parent_post_id = match.group(1)
+                    break
+
+        # 4. 构造请求载荷
+        model_info = ModelService.get(model)
+        model_config_override = {
+            "modelMap": {
+                "imageEditModel": "imagine",
+                "imageEditModelConfig": {
+                    "imageReferences": image_urls,
+                },
+            }
+        }
+        if parent_post_id:
+            model_config_override["modelMap"]["imageEditModelConfig"]["parentPostId"] = parent_post_id
+
+        raw_payload = {
+            "temporary": bool(get_config("chat.temporary")),
+            "modelName": model_info.grok_model,
+            "message": prompt,
+            "enableImageGeneration": True,
+            "returnImageBytes": False,
+            "returnRawGrokInXaiRequest": False,
+            "enableImageStreaming": True,
+            "imageGenerationCount": 2,
+            "forceConcise": False,
+            "toolOverrides": {"imageGen": True},
+            "enableSideBySide": True,
+            "sendFinalMetadata": True,
+            "isReasoning": False,
+            "disableTextFollowUps": True,
+            "responseMetadata": {"modelConfigOverride": model_config_override},
+            "disableMemory": False,
+            "forceSideBySide": False,
+        }
+
+        # 5. 调用 Grok
+        service = GrokChatService()
+        response = await service.chat(
+            token=token,
+            message=prompt,
+            model=model_info.grok_model,
+            mode=None,
+            stream=True,
+            raw_payload=raw_payload,
+        )
+
+        # 6. 处理响应
+        image_format = get_config("app.image_format")
+        if is_stream:
+            logger.debug(f"Processing image edit stream response: model={model}")
+            processor = ImageStreamProcessor(model, token, n=1, response_format=image_format)
+            
+            async def chat_stream_wrapper():
+                # 先发送 role
+                role_chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": ""},
+                            "finish_reason": None
+                        }
+                    ]
+                }
+                yield f"data: {orjson.dumps(role_chunk).decode()}\n\n"
+
+                async for sse_msg in processor.process(response):
+                    if not sse_msg.strip():
+                        continue
+                    
+                    if sse_msg.startswith("event: image_generation.completed"):
+                        try:
+                            data_line = ""
+                            for line in sse_msg.splitlines():
+                                if line.startswith("data: "):
+                                    data_line = line[6:].strip()
+                                    break
+                            
+                            if not data_line:
+                                continue
+                            
+                            data = orjson.loads(data_line)
+                            content = ""
+                            if b64 := data.get("b64_json"):
+                                img_id = str(uuid.uuid4())[:8]
+                                content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+                            elif url := data.get("url"):
+                                img_id = str(uuid.uuid4())[:8]
+                                content = f"![{img_id}]({url})\n"
+                            
+                            if content:
+                                chunk = {
+                                    "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                                    "object": "chat.completion.chunk",
+                                    "created": int(time.time()),
+                                    "model": model,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"content": content},
+                                            "finish_reason": None
+                                        }
+                                    ]
+                                }
+                                yield f"data: {orjson.dumps(chunk).decode()}\n\n"
+                        except Exception as e:
+                            logger.warning(f"Failed to process image edit SSE: {e}")
+                    elif sse_msg.startswith("event: error"):
+                        yield sse_msg
+                
+                # 发送结束标记
+                final_chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                    "object": "chat.completion.chunk",
+                    "created": int(time.time()),
+                    "model": model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }
+                    ]
+                }
+                yield f"data: {orjson.dumps(final_chunk).decode()}\n\n"
+                yield "data: [DONE]\n\n"
+
+            return wrap_stream_with_usage(
+                chat_stream_wrapper(), token_mgr, token, model
+            )
+        else:
+            logger.debug(f"Processing image edit collect response: model={model}")
+            processor = ImageCollectProcessor(model, token, response_format=image_format)
+            image_results = await processor.process(response)
+            
+            content = ""
+            for img_data in image_results:
+                img_id = str(uuid.uuid4())[:8]
+                if img_data.startswith("http") or img_data.startswith("/v1/files"):
+                    content += f"![{img_id}]({img_data})\n"
+                else:
+                    content += f"![{img_id}](data:image/jpeg;base64,{img_data})\n"
+            
+            result = {
+                "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": content.strip(),
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                }
+            }
+            
+            try:
+                effort = EffortType.HIGH
+                await token_mgr.consume(token, effort)
+                logger.info(f"Image edit chat completed: model={model}, effort={effort.value}")
+            except Exception as e:
+                logger.warning(f"Failed to record usage: {e}")
+            
+            return result
 
 
 __all__ = [
