@@ -461,7 +461,7 @@ class ChatService:
                 logger.debug(f"Processing image stream response: model={model}")
                 # 强制使用 url 格式以便处理
                 image_format = get_config("app.image_format")
-                processor = ImageWSStreamProcessor(model, token, response_format=image_format)
+                processor = ImageWSStreamProcessor(model, token, response_format=image_format, only_completed=True)
                 
                 async def chat_stream_wrapper():
                     # 先发送 role

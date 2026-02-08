@@ -102,6 +102,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
         n: int = 1,
         response_format: str = "b64_json",
         size: str = "1024x1024",
+        only_completed: bool = False,
     ):
         super().__init__(model, token, response_format)
         self.n = n
@@ -109,6 +110,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
         self._target_id: Optional[str] = None
         self._index_map: Dict[str, int] = {}
         self._partial_map: Dict[str, int] = {}
+        self._only_completed = only_completed
 
     def _assign_index(self, image_id: str) -> Optional[int]:
         if image_id in self._index_map:
@@ -158,7 +160,7 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
             if index is None:
                 continue
 
-            if item.get("stage") != "final":
+            if item.get("stage") != "final" and not self._only_completed:
                 partial_b64 = self._strip_base64(item.get("blob", ""))
                 if not partial_b64:
                     continue
@@ -237,7 +239,7 @@ class ImageWSCollectProcessor(ImageWSBaseProcessor):
     ):
         super().__init__(model, token, response_format)
         self.n = n
-    
+
     async def process(self, response: AsyncIterable[dict]) -> List[str]:
         images: Dict[str, Dict] = {}
 
