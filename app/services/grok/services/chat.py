@@ -389,6 +389,7 @@ class ChatService:
         messages: List[Dict[str, Any]],
         stream: bool = None,
         thinking: str = None,
+        n: int = 1,
     ):
         """Chat Completions 入口"""
         # 获取 token
@@ -425,7 +426,7 @@ class ChatService:
         model_info = ModelService.get(model)
         if model_info and model_info.is_image:
             if model == "grok-imagine-1.0":
-                return await ChatService.generate_image(model, is_stream, token, messages, token_mgr)
+                return await ChatService.generate_image(model, is_stream, token, messages, token_mgr, n)
             elif model == "grok-imagine-1.0-edit":
                 return await ChatService.edit_image(model, is_stream, token, messages, token_mgr)
 
@@ -456,18 +457,18 @@ class ChatService:
         return result
     
     @staticmethod
-    async def generate_image(model: str, is_stream: bool, token: str, messages: List[str], token_mgr: TokenManager):
+    async def generate_image(model: str, is_stream: bool, token: str, messages: List[str], token_mgr: TokenManager, n: int = 1):
         # 提取提示词
             message, _ = MessageExtractor.extract(messages)
             
             # 调用图片服务
-            gen_request = image_service.stream(token, message)
+            gen_request = image_service.stream(token, message, n=n)
             
             if is_stream:
                 logger.debug(f"Processing image stream response: model={model}")
                 # 强制使用 url 格式以便处理
-                image_format = get_config("app.image_format")
-                processor = ImageWSStreamProcessor(model, token, response_format=image_format)
+                image_format = get_config("app.image_format", "b64_json")
+                processor = ImageWSStreamProcessor(model, token, n, image_format)
                 
                 async def chat_stream_wrapper():
                     # 先发送 role
@@ -558,8 +559,8 @@ class ChatService:
                 )
             else:
                 logger.debug(f"Processing image collect response: model={model}")
-                image_format = get_config("app.image_format")
-                processor = ImageWSCollectProcessor(model, token, response_format=image_format)
+                image_format = get_config("app.image_format", "b64_json")
+                processor = ImageWSCollectProcessor(model, token, n, image_format)
                 image_results = await processor.process(gen_request)
                 
                 # 将图片结果转回 chat 标准输出格式
