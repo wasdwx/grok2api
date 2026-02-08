@@ -513,6 +513,11 @@ class ChatService:
                                 elif url := data.get("url"):
                                     img_id = str(uuid.uuid4())[:8]
                                     content = f"![{img_id}]({url})\n"
+                                elif b64 := data.get("base64"):
+                                    img_id = str(uuid.uuid4())[:8]
+                                    content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+                                else:
+                                    logger.warning(f"Invalid image data: {data}")
                                 
                                 if content:
                                     chunk = {
@@ -619,7 +624,7 @@ class ChatService:
         try:
             for attach_type, attach_data in attachments:
                 if attach_type == "image":
-                    file_id, file_uri = await upload_service.upload(attach_data, token)
+                    _, file_uri = await upload_service.upload(attach_data, token)
                     if file_uri:
                         if file_uri.startswith("http"):
                             image_urls.append(file_uri)
@@ -740,6 +745,12 @@ class ChatService:
                             elif url := data.get("url"):
                                 img_id = str(uuid.uuid4())[:8]
                                 content = f"![{img_id}]({url})\n"
+                                content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+                            elif b64 := data.get("base64"):
+                                img_id = str(uuid.uuid4())[:8]
+                                content = f"![{img_id}](data:image/jpeg;base64,{b64})\n"
+                            else:
+                                logger.warning(f"Invalid image data: {data}")
                             
                             if content:
                                 chunk = {
