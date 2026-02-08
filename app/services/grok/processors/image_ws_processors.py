@@ -202,26 +202,24 @@ class ImageWSStreamProcessor(ImageWSBaseProcessor):
                     },
                 )
 
+        # 结束流式传输，发送最终结果
         if self.n == 1:
-            # n=1 时，从所有收到的图片中选出最好的（优先 is_final，其次 blob_size）
-            best_item = None
-            if images:
-                best_id, best_item = max(
-                    images.items(),
-                    key=lambda x: (
-                        x[1].get("is_final", False),
-                        x[1].get("blob_size", 0),
-                    ),
-                )
-            selected = [(best_id, best_item)] if best_item else []
+            # n=1 时，从所有收到的图片中选出最好的
+            all_images = sorted(
+                images.values(),
+                key=lambda x: (x.get("is_final", False), len(x.get("blob", ""))),
+                reverse=True,
+            )
+            selected_items = [all_images[0]] if all_images else []
         else:
-            selected = [
-                (image_id, images[image_id])
-                for image_id in self._index_map
-                if image_id in images
-            ]
+            # n > 1 时，按 index_map 顺序返回
+            selected_items = []
+            for image_id in sorted(self._index_map, key=self._index_map.get):
+                if image_id in images:
+                    selected_items.append(images[image_id])
 
-        for image_id, item in selected:
+        for item in selected_items:
+            image_id = item.get("image_id", "")
             output = self._to_output(image_id, item)
             if not output:
                 continue
