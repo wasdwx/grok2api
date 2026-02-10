@@ -113,6 +113,7 @@ class ImageStreamProcessor(BaseProcessor):
                                     final_images.append(processed)
                     continue
 
+            logger.info(f"Final images: {len(final_images)}")
             for index, b64 in enumerate(final_images):
                 if self.n == 1:
                     if index != self.target_index:
@@ -242,6 +243,7 @@ class ImageCollectProcessor(BaseProcessor):
         finally:
             await self.close()
 
+        logger.info(f"Final images: {len(images)}")
         return images
 
 
