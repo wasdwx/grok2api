@@ -207,7 +207,7 @@ class BaseService:
                 response = await session.get(url, timeout=10)
                 if response.status_code >= 400:
                     raise UpstreamException(
-                        message=f"Failed to fetch: {response.status_code}",
+                        message=f"Failed to fetch: {response.status_code} {url}",
                         details={"url": url, "status": response.status_code},
                     )
 
@@ -222,7 +222,7 @@ class BaseService:
         except Exception as e:
             if isinstance(e, AppException):
                 raise
-            logger.error(f"Fetch failed: {url} - {e}")
+            logger.error(f"Fetch failed: {url} - {e} {url}")
             raise UpstreamException(f"Fetch failed: {str(e)}", details={"url": url})
 
     @staticmethod
