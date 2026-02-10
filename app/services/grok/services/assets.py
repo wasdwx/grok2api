@@ -207,8 +207,7 @@ class BaseService:
         if not url.startswith(get_config("app.app_url")):
             logger.warning(f"Invalid URL: {url}")
             raise ValidationException(
-                message=f"Invalid URL: {url}",
-                details={"url": url},
+                message=f"Invalid URL: {url}"
             )
 
         try:
