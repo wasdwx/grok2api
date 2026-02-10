@@ -50,6 +50,26 @@ class MessageExtractor:
     """消息内容提取器"""
 
     @staticmethod
+    def extract_url_from_message(message: str) -> tuple[str, list[str]]:
+        """从消息中提取图片 URL或Base64，并从中移除"""
+
+        results = []
+        urls = re.findall(r"(https?://[^\s]+)", message)
+        if urls:
+            for url in urls:
+                results.append(url)
+                message = message.replace(url, "")
+        
+        # Base64形式
+        base64_urls = re.findall(r"(data:image/[^;]+;base64,[a-zA-Z0-9+/=\s]+)", message)
+        if base64_urls:
+            for url in base64_urls:
+                results.append(url)
+                message = message.replace(url, "")
+        
+        return message, results
+
+    @staticmethod
     def extract(
         messages: List[Dict[str, Any]], is_video: bool = False
     ) -> tuple[str, List[tuple[str, str]]]:
@@ -65,14 +85,18 @@ class MessageExtractor:
 
             if isinstance(content, str):
                 if content.strip():
-                    parts.append(content)
+                    msg, urls = MessageExtractor.extract_url_from_message(content)
+                    parts.append(msg)
+                    attachments.extend(urls)
             elif isinstance(content, list):
                 for item in content:
                     item_type = item.get("type", "")
 
                     if item_type == "text":
                         if text := item.get("text", "").strip():
-                            parts.append(text)
+                            msg, urls = MessageExtractor.extract_url_from_message(text)
+                            parts.append(msg)
+                            attachments.extend(urls)
 
                     elif item_type == "image_url":
                         image_data = item.get("image_url", {})

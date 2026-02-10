@@ -202,6 +202,15 @@ class BaseService:
     @staticmethod
     async def fetch(url: str) -> Tuple[str, str, str]:
         """获取远程资源并转 Base64"""
+
+        # 防止泄漏服务器 IP
+        if not url.startswith(get_config("app.app_url")):
+            logger.warning(f"Invalid URL: {url}")
+            raise ValidationException(
+                message=f"Invalid URL: {url}",
+                details={"url": url},
+            )
+
         try:
             async with AsyncSession() as session:
                 response = await session.get(url, timeout=10)
