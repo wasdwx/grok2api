@@ -416,6 +416,7 @@ function openEditModal(index) {
     byId('edit-pool').value = item.pool;
     byId('edit-quota').value = item.quota;
     byId('edit-note').value = item.note;
+    byId('edit-nsfw').checked = item.tags && item.tags.includes('nsfw');
     document.querySelector('#edit-modal h3').innerText = '编辑 Token';
   } else {
     // New Token
@@ -430,6 +431,7 @@ function openEditModal(index) {
     byId('edit-pool').value = 'ssoBasic';
     byId('edit-quota').value = getDefaultQuotaForPool('ssoBasic');
     byId('edit-note').value = '';
+    byId('edit-nsfw').checked = false;
     document.querySelector('#edit-modal h3').innerText = '添加 Token';
   }
 
@@ -464,6 +466,8 @@ async function saveEdit() {
   const newQuota = parseInt(byId('edit-quota').value) || 0;
   const newNote = byId('edit-note').value.trim().slice(0, 50);
 
+  const nsfwChecked = byId('edit-nsfw').checked;
+
   if (currentEditIndex >= 0) {
     // Updating existing
     const item = flatTokens[currentEditIndex];
@@ -473,6 +477,12 @@ async function saveEdit() {
     item.pool = newPool || 'ssoBasic';
     item.quota = newQuota;
     item.note = newNote;
+
+    // Update NSFW tag
+    if (!Array.isArray(item.tags)) item.tags = [];
+    const hasNsfw = item.tags.includes('nsfw');
+    if (nsfwChecked && !hasNsfw) item.tags.push('nsfw');
+    if (!nsfwChecked && hasNsfw) item.tags = item.tags.filter(tag => tag !== 'nsfw');
   } else {
     // Creating new
     token = byId('edit-token-display').value.trim();
@@ -489,6 +499,7 @@ async function saveEdit() {
       quota: newQuota,
       note: newNote,
       status: 'active', // default
+      tags: nsfwChecked ? ['nsfw'] : [],
       use_count: 0,
       _selected: false
     });
@@ -559,6 +570,8 @@ function closeImportModal() {
   closeModal('import-modal', () => {
     const input = byId('import-text');
     if (input) input.value = '';
+    const nsfw = byId('import-nsfw');
+    if (nsfw) nsfw.checked = false;
   });
 }
 
@@ -567,6 +580,7 @@ async function submitImport() {
   const text = byId('import-text').value;
   const lines = text.split('\n');
   const defaultQuota = getDefaultQuotaForPool(pool);
+  const nsfwEnabled = byId('import-nsfw').checked;
 
   lines.forEach(line => {
     const t = line.trim();
@@ -577,7 +591,7 @@ async function submitImport() {
         status: 'active',
         quota: defaultQuota,
         note: '',
-        tags: [],
+        tags: nsfwEnabled ? ['nsfw'] : [],
         fail_count: 0,
         use_count: 0,
         _selected: false

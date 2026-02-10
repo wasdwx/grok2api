@@ -227,9 +227,15 @@
           <textarea id="import-text" class="geist-input font-mono h-48"
             placeholder="粘贴 Token，一行一个..."></textarea>
         </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <button onclick="closeImportModal()" class="geist-button-outline text-xs px-3">取消</button>
-          <button onclick="submitImport()" class="geist-button text-xs px-3">开始导入</button>
+        <div class="flex items-center justify-between pt-2">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="import-nsfw" class="checkbox">
+            <span class="text-sm text-[var(--accents-5)]">NSFW 已开启</span>
+          </label>
+          <div class="flex gap-2">
+            <button onclick="closeImportModal()" class="geist-button-outline text-xs px-3">取消</button>
+            <button onclick="submitImport()" class="geist-button text-xs px-3">开始导入</button>
+          </div>
         </div>
       </div>
     </div>
@@ -270,9 +276,15 @@
           <label class="modal-label mb-1 block">备注</label>
           <input type="text" id="edit-note" class="geist-input" placeholder="可选备注" maxlength="50">
         </div>
-        <div class="flex justify-end gap-2 pt-2">
-          <button onclick="closeEditModal()" class="geist-button-outline text-xs px-3">取消</button>
-          <button onclick="saveEdit()" class="geist-button text-xs px-3">保存</button>
+        <div class="flex items-center justify-between pt-2">
+          <label class="flex items-center gap-2 cursor-pointer select-none">
+            <input type="checkbox" id="edit-nsfw" class="checkbox">
+            <span class="text-sm text-[var(--accents-5)]">NSFW 已开启</span>
+          </label>
+          <div class="flex gap-2">
+            <button onclick="closeEditModal()" class="geist-button-outline text-xs px-3">取消</button>
+            <button onclick="saveEdit()" class="geist-button text-xs px-3">保存</button>
+          </div>
         </div>
       </div>
     </div>
@@ -297,7 +309,7 @@
   <script src="/static/common/header.js?v=4"></script>
   <script src="/static/common/footer.js?v=1"></script>
   <script src="/static/common/toast.js"></script>
-  <script src="/static/token/token.js?v=19"></script>
+  <script src="/static/token/token.js?v=20"></script>
 </body>
 
 </html>
