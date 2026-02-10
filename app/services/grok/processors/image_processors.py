@@ -50,6 +50,7 @@ class ImageStreamProcessor(BaseProcessor):
         """处理流式响应"""
         final_images = []
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        responses = []
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -62,6 +63,8 @@ class ImageStreamProcessor(BaseProcessor):
                     continue
 
                 resp = data.get("result", {}).get("response", {})
+                if resp:
+                    responses.append(resp)
 
                 # 图片生成进度
                 if img := resp.get("streamingImageGenerationResponse"):
@@ -85,8 +88,7 @@ class ImageStreamProcessor(BaseProcessor):
                     continue
 
                 # modelResponse
-                mr = resp.get("modelResponse")
-                if mr:
+                if mr := resp.get("modelResponse"):
                     if urls := _collect_image_urls(mr):
                         for url in urls:
                             if self.response_format == "url":
@@ -116,7 +118,7 @@ class ImageStreamProcessor(BaseProcessor):
 
             logger.info(f"Final images: {len(final_images)}")
             if not final_images:
-                logger.error(f"No final images found {mr}")
+                logger.error(f"No final images found {responses}")
 
             for index, b64 in enumerate(final_images):
                 if self.n == 1:
@@ -190,6 +192,7 @@ class ImageCollectProcessor(BaseProcessor):
         """处理并收集图片"""
         images = []
         idle_timeout = get_config("timeout.stream_idle_timeout")
+        responses = []
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -202,9 +205,10 @@ class ImageCollectProcessor(BaseProcessor):
                     continue
 
                 resp = data.get("result", {}).get("response", {})
+                if resp:
+                    responses.append(resp)
 
-                mr = resp.get("modelResponse")
-                if mr:
+                if mr := resp.get("modelResponse"):
                     if urls := _collect_image_urls(mr):
                         for url in urls:
                             if self.response_format == "url":
@@ -250,8 +254,8 @@ class ImageCollectProcessor(BaseProcessor):
 
         logger.info(f"Final images: {len(images)}")
         if not images:
-            logger.error(f"No final images found {mr}")
-
+            logger.error(f"No final images found {responses}")
+        
         return images
 
 
