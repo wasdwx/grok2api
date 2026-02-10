@@ -54,7 +54,7 @@ class MessageExtractor:
         """从消息中提取图片 URL或Base64，并从中移除"""
 
         results = []
-        urls = re.findall(r"(https?://[^\s]+)", message)
+        urls = re.findall(r"(https?://[^\s]+\.(?:jpg|png|webp))", message)
         if urls:
             for url in urls:
                 results.append(url)
