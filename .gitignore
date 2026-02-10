@@ -47,6 +47,10 @@ logs/
 # Data
 data/config.toml
 data/*.json
+
+# Docker (用户自定义 compose 文件)
+docker-compose.yml
+docker-compose.override.yml
 data/tmp/*
 data/.locks/*
 app/data/*.json
