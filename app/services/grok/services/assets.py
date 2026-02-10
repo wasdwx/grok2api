@@ -162,6 +162,7 @@ class BaseService:
                 "Sec-Fetch-User": "?1",
                 "Referer": referer,
                 "User-Agent": self.config.user_agent,
+                "Baggage": "sentry-environment=production,sentry-release=d6add6fb0460641fd482d767a335ef72b9b6abb8,sentry-public_key=b311e0f2690c81f25e2c4cf6d4f7ce1c",
             }
         else:
             headers = {
@@ -170,6 +171,7 @@ class BaseService:
                 "Origin": "https://grok.com",
                 "Referer": referer,
                 "User-Agent": self.config.user_agent,
+                "Baggage": "sentry-environment=production,sentry-release=d6add6fb0460641fd482d767a335ef72b9b6abb8,sentry-public_key=b311e0f2690c81f25e2c4cf6d4f7ce1c",
             }
             apply_statsig(headers)
 
@@ -331,7 +333,7 @@ class UploadService(BaseService):
                 )
 
             # 其他错误
-            logger.error(f"Upload failed: {filename} - {response.status_code} - {response.text} - {file_input[:24]}")
+            logger.error(f"Upload failed: {filename} - {response.status_code} - {response.text[:50]} - {file_input[:24]}")
             raise UpstreamException(
                 message=f"Upload failed: {response.status_code}",
                 details={"status": response.status_code},
@@ -552,7 +554,7 @@ class DownloadService(BaseService):
         if not file_path.startswith("/"):
             file_path = f"/{file_path}"
 
-        url = f"{DOWNLOAD_API}{file_path}"
+        url = f"{DOWNLOAD_API}{file_path}?cache=1"
         headers = self._build_headers(token, download=True)
 
         session = await self._get_session()
@@ -568,7 +570,7 @@ class DownloadService(BaseService):
 
         if response.status_code != 200:
             raise UpstreamException(
-                message=f"Download failed: {response.status_code}",
+                message=f"Download failed: {response.status_code} {response.text[:50]}",
                 details={"path": file_path, "status": response.status_code},
             )
 
