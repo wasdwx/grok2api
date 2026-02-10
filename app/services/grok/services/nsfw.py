@@ -2,6 +2,7 @@
 NSFW (Unhinged) 模式服务
 
 使用 gRPC-Web 协议开启账号的 NSFW 功能。
+流程：同意 ToS → 设置出生日期 → 开启 NSFW
 """
 
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from app.services.grok.protocols.grpc_web import (
 )
 from app.services.grok.utils.headers import build_sso_cookie
 
+TOS_API = "https://accounts.x.ai/auth_mgmt.AuthManagement/SetTosAcceptedVersion"
 NSFW_API = "https://grok.com/auth_mgmt.AuthManagement/UpdateUserFeatureControls"
 BIRTH_DATE_API = "https://grok.com/rest/auth/set-birth-date"
 
@@ -60,7 +62,7 @@ class NSFWService:
         return f"{birth_year:04d}-{birth_month:02d}-{birth_day:02d}T{hour:02d}:{minute:02d}:{second:02d}.{microsecond:03d}Z"
 
     def _build_headers(self, token: str) -> dict:
-        """构造 gRPC-Web 请求头"""
+        """构造 gRPC-Web 请求头（grok.com）"""
         cookie = build_sso_cookie(token, include_rw=True)
         user_agent = get_config("security.user_agent")
         return {
@@ -68,6 +70,21 @@ class NSFWService:
             "content-type": "application/grpc-web+proto",
             "origin": "https://grok.com",
             "referer": "https://grok.com/",
+            "user-agent": user_agent,
+            "x-grpc-web": "1",
+            "x-user-agent": "connect-es/2.1.1",
+            "cookie": cookie,
+        }
+
+    def _build_tos_headers(self, token: str) -> dict:
+        """构造同意 ToS 请求头（accounts.x.ai）"""
+        cookie = build_sso_cookie(token, include_rw=True)
+        user_agent = get_config("security.user_agent")
+        return {
+            "accept": "*/*",
+            "content-type": "application/grpc-web+proto",
+            "origin": "https://accounts.x.ai",
+            "referer": "https://accounts.x.ai/accept-tos",
             "user-agent": user_agent,
             "x-grpc-web": "1",
             "x-user-agent": "connect-es/2.1.1",
@@ -89,7 +106,7 @@ class NSFWService:
 
     @staticmethod
     def _build_payload() -> bytes:
-        """构造请求 payload"""
+        """构造 NSFW 开启请求 payload"""
         # protobuf (match captured HAR):
         # 0a 02 10 01                   -> field 1 (len=2) with inner bool=true
         # 12 1a                         -> field 2, length 26
@@ -98,6 +115,63 @@ class NSFWService:
         inner = b"\x0a" + bytes([len(name)]) + name
         protobuf = b"\x0a\x02\x10\x01\x12" + bytes([len(inner)]) + inner
         return encode_grpc_web_payload(protobuf)
+
+    @staticmethod
+    def _build_tos_payload() -> bytes:
+        """
+        构造同意 ToS 请求 payload
+
+        抓包数据: \\x00\\x00\\x00\\x00\\x02\\x10\\x01
+        protobuf: field 2 (varint) = 1，即 tos_version = 1
+        """
+        protobuf = b"\x10\x01"
+        return encode_grpc_web_payload(protobuf)
+
+    async def _accept_tos(
+        self, session: AsyncSession, token: str
+    ) -> tuple[bool, int, Optional[str]]:
+        """
+        同意 ToS 条款
+
+        Grok 现在要求账号先在 accounts.x.ai 同意新版 ToS，
+        否则后续的 NSFW 等设置操作会被静默忽略。
+        """
+        headers = self._build_tos_headers(token)
+        payload = self._build_tos_payload()
+        logger.debug(f"ToS payload: len={len(payload)} hex={payload.hex()}")
+
+        try:
+            response = await session.post(
+                TOS_API,
+                data=payload,
+                headers=headers,
+                timeout=self.timeout,
+                proxies=self._build_proxies(),
+            )
+
+            if response.status_code != 200:
+                return False, response.status_code, f"HTTP {response.status_code}"
+
+            # 解析 gRPC-Web 响应
+            _, trailers = parse_grpc_web_response(
+                response.content, content_type=response.headers.get("content-type")
+            )
+            grpc_status = get_grpc_status(trailers)
+            logger.debug(
+                f"ToS response: http={response.status_code} grpc={grpc_status.code} "
+                f"msg={grpc_status.message}"
+            )
+
+            # grpc-status=0 或无 grpc-status（空响应）都算成功
+            if grpc_status.code == -1 or grpc_status.ok:
+                return True, response.status_code, None
+
+            return False, response.status_code, (
+                f"gRPC {grpc_status.code}: {grpc_status.message}"
+            )
+
+        except Exception as e:
+            return False, 0, str(e)[:100]
 
     async def _set_birth_date(
         self, session: AsyncSession, token: str
@@ -121,7 +195,11 @@ class NSFWService:
             return False, 0, str(e)[:100]
 
     async def enable(self, token: str) -> NSFWResult:
-        """为单个 token 开启 NSFW 模式"""
+        """
+        为单个 token 开启 NSFW 模式
+
+        完整流程：同意 ToS → 设置出生日期 → 开启 NSFW
+        """
         headers = self._build_headers(token)
         payload = self._build_payload()
         logger.debug(f"NSFW payload: len={len(payload)} hex={payload.hex()}")
@@ -129,7 +207,22 @@ class NSFWService:
         try:
             browser = get_config("security.browser")
             async with AsyncSession(impersonate=browser) as session:
-                # 先设置出生日期
+                # 第一步：同意 ToS 条款（accounts.x.ai）
+                ok, tos_status, tos_err = await self._accept_tos(session, token)
+                if not ok:
+                    logger.warning(f"ToS accept failed: status={tos_status} err={tos_err}")
+                    # ToS 失败不一定阻塞（可能已经同意过），记录日志但继续
+                    # 只有明确的认证失败才中断
+                    if tos_status in (401, 403):
+                        return NSFWResult(
+                            success=False,
+                            http_status=tos_status,
+                            error=f"ToS accept failed (auth error): {tos_err}",
+                        )
+                else:
+                    logger.info("ToS accepted successfully")
+
+                # 第二步：设置出生日期
                 ok, birth_status, birth_err = await self._set_birth_date(session, token)
                 if not ok:
                     return NSFWResult(
@@ -138,7 +231,7 @@ class NSFWService:
                         error=f"Set birth date failed: {birth_err}",
                     )
 
-                # 开启 NSFW
+                # 第三步：开启 NSFW
                 response = await session.post(
                     NSFW_API,
                     data=payload,
