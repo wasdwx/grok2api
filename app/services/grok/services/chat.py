@@ -417,6 +417,7 @@ class ChatService:
         messages: List[Dict[str, Any]],
         stream: bool = None,
         thinking: str = None,
+        n: int = 1
     ):
         """Chat Completions 入口"""
         # 获取 token
