@@ -152,7 +152,6 @@ class ModelService:
             model_mode="MODEL_MODE_GROK_420",
             cost=Cost.HIGH,
             display_name="GROK-4.20",
-            is_video=True,
         ),
     ]
 
