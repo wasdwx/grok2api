@@ -146,6 +146,14 @@ class ModelService:
             description="Video generation model",
             is_video=True,
         ),
+        ModelInfo(
+            model_id="grok-4.20",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_GROK_420",
+            cost=Cost.HIGH,
+            display_name="GROK-4.20",
+            is_video=True,
+        ),
     ]
 
     _map = {m.model_id: m for m in MODELS}
