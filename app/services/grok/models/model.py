@@ -103,14 +103,14 @@ class ModelService:
             grok_model="grok-420",
             model_mode="MODEL_MODE_FAST",
             cost=Cost.LOW,
-            display_name="GROK-4.1-FAST",
+            display_name="GROK-4.20-FAST",
         ),
         ModelInfo(
             model_id="grok-4.20-expert",
             grok_model="grok-420",
             model_mode="MODEL_MODE_EXPERT",
             cost=Cost.HIGH,
-            display_name="GROK-4.1-EXPERT",
+            display_name="GROK-4.20-EXPERT",
         ),
         ModelInfo(
             model_id="grok-imagine-1.0",
