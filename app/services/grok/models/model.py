@@ -146,6 +146,27 @@ class ModelService:
             cost=Cost.HIGH,
             display_name="GROK-4.20",
         ),
+        ModelInfo(
+            model_id="grok-4.1-fast",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_FAST",
+            cost=Cost.LOW,
+            display_name="GROK-4.1-FAST",
+        ),
+        ModelInfo(
+            model_id="grok-4.1-expert",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_EXPERT",
+            cost=Cost.HIGH,
+            display_name="GROK-4.1-EXPERT",
+        ),
+        ModelInfo(
+            model_id="grok-4.1-thinking",
+            grok_model="grok-4-1-thinking-1129",
+            model_mode="MODEL_MODE_GROK_4_1_THINKING",
+            cost=Cost.HIGH,
+            display_name="GROK-4.1-THINKING",
+        ),
     ]
 
     _map = {m.model_id: m for m in MODELS}
