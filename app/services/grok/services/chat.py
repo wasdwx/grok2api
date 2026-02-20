@@ -320,7 +320,11 @@ class GrokChatService:
         # 重试机制
         def extract_status(e: Exception) -> int | None:
             if isinstance(e, UpstreamException) and e.details:
-                return e.details.get("status")
+                status = e.details.get("status")
+                # 429 不在内层重试，由外层跨 token 重试处理
+                if status == 429:
+                    return None
+                return status
             return None
 
         session = None
@@ -413,72 +417,118 @@ class ChatService:
         messages: List[Dict[str, Any]],
         stream: bool = None,
         thinking: str = None,
-        n: int = 1,
+        n: int = 1
     ):
         """Chat Completions 入口"""
         # 获取 token
         token_mgr = await get_token_manager()
         await token_mgr.reload_if_stale()
 
-        token = None
-        for pool_name in ModelService.pool_candidates_for_model(model):
-            token = token_mgr.get_token(pool_name)
-            if token:
-                break
-
-        if not token:
-            raise AppException(
-                message="No available tokens. Please try again later.",
-                error_type=ErrorType.RATE_LIMIT.value,
-                code="rate_limit_exceeded",
-                status_code=429,
-            )
-
-        # 解析参数
+        # 解析参数（只需解析一次）
         think = {"enabled": True, "disabled": False}.get(thinking)
         is_stream = stream if stream is not None else get_config("chat.stream")
 
-        # 构造请求
+        # 构造请求（只需构造一次）
         chat_request = ChatRequest(
             model=model, messages=messages, stream=is_stream, think=think
         )
 
-        # 请求 Grok
-        service = GrokChatService()
-        
-        # 特殊处理 grok-imagine-1.0
-        model_info = ModelService.get(model)
-        if model_info and model_info.is_image:
-            if model == "grok-imagine-1.0":
-                return await ChatService.generate_image(model, is_stream, token, messages, token_mgr, n)
-            elif model == "grok-imagine-1.0-edit":
-                return await ChatService.edit_image(model, is_stream, token, messages, token_mgr)
+        # 跨 Token 重试循环
+        tried_tokens = set()
+        max_token_retries = int(get_config("retry.max_retry"))
+        last_error = None
 
-        response, _, model_name = await service.chat_openai(token, chat_request)
+        for attempt in range(max_token_retries):
+            # 选择 token（排除已失败的）
+            token = None
+            for pool_name in ModelService.pool_candidates_for_model(model):
+                token = token_mgr.get_token(pool_name, exclude=tried_tokens)
+                if token:
+                    break
 
-        # 处理响应
-        if is_stream:
-            logger.debug(f"Processing stream response: model={model}")
-            processor = StreamProcessor(model_name, token, think)
-            return wrap_stream_with_usage(
-                processor.process(response), token_mgr, token, model
-            )
+            if not token and not tried_tokens:
+                # 首次就无 token，尝试刷新
+                logger.info("No available tokens, attempting to refresh cooling tokens...")
+                result = await token_mgr.refresh_cooling_tokens()
+                if result.get("recovered", 0) > 0:
+                    for pool_name in ModelService.pool_candidates_for_model(model):
+                        token = token_mgr.get_token(pool_name)
+                        if token:
+                            break
 
-        # 非流式
-        logger.debug(f"Processing non-stream response: model={model}")
-        result = await CollectProcessor(model_name, token).process(response)
-        try:
-            model_info = ModelService.get(model)
-            effort = (
-                EffortType.HIGH
-                if (model_info and model_info.cost.value == "high")
-                else EffortType.LOW
-            )
-            await token_mgr.consume(token, effort)
-            logger.info(f"Chat completed: model={model}, effort={effort.value}")
-        except Exception as e:
-            logger.warning(f"Failed to record usage: {e}")
-        return result
+            if not token:
+                if last_error:
+                    raise last_error
+                raise AppException(
+                    message="No available tokens. Please try again later.",
+                    error_type=ErrorType.RATE_LIMIT.value,
+                    code="rate_limit_exceeded",
+                    status_code=429,
+                )
+
+            tried_tokens.add(token)
+
+            try:
+                # 图片生成和编辑的特殊处理
+                model_info = ModelService.get(model)
+                if model_info and model_info.is_image:
+                    if model == "grok-imagine-1.0":
+                        return await ChatService.generate_image(model, is_stream, token, messages, token_mgr, n)
+                    elif model == "grok-imagine-1.0-edit":
+                        return await ChatService.edit_image(model, is_stream, token, messages, token_mgr)
+
+                # 请求 Grok
+                service = GrokChatService()
+                response, _, model_name = await service.chat_openai(token, chat_request)
+
+                # 处理响应
+                if is_stream:
+                    logger.debug(f"Processing stream response: model={model}")
+                    processor = StreamProcessor(model_name, token, think)
+                    return wrap_stream_with_usage(
+                        processor.process(response), token_mgr, token, model
+                    )
+
+                # 非流式
+                logger.debug(f"Processing non-stream response: model={model}")
+                result = await CollectProcessor(model_name, token).process(response)
+                try:
+                    effort = (
+                        EffortType.HIGH
+                        if (model_info and model_info.cost.value == "high")
+                        else EffortType.LOW
+                    )
+                    await token_mgr.consume(token, effort)
+                    logger.info(f"Chat completed: model={model}, effort={effort.value}")
+                except Exception as e:
+                    logger.warning(f"Failed to record usage: {e}")
+                return result
+
+            except UpstreamException as e:
+                status_code = e.details.get("status") if e.details else None
+                last_error = e
+
+                if status_code == 429:
+                    # 配额不足，标记 token 为 cooling 并换 token 重试
+                    await token_mgr.mark_rate_limited(token)
+                    logger.warning(
+                        f"Token {token[:10]}... rate limited (429), "
+                        f"trying next token (attempt {attempt + 1}/{max_token_retries})"
+                    )
+                    continue
+
+                # 非 429 错误，不换 token，直接抛出
+                raise
+
+        # 所有 token 都 429，抛出最后的错误
+        if last_error:
+            raise last_error
+        raise AppException(
+            message="No available tokens. Please try again later.",
+            error_type=ErrorType.RATE_LIMIT.value,
+            code="rate_limit_exceeded",
+            status_code=429,
+        )
     
     @staticmethod
     async def generate_image(model: str, is_stream: bool, token: str, messages: List[str], token_mgr: TokenManager, n: int = 1):
@@ -541,7 +591,7 @@ class ChatService:
                                     img_id = str(uuid.uuid4())[:8]
                                     content += f"![{img_id}](data:image/jpeg;base64,{b64})\n"
                                 if not content:
-                                    logger.warning(f"Invalid image data: {data}")
+                                    logger.warning(f"Invalid image response: {data}")
                                 
                                 if content:
                                     chunk = {
@@ -774,7 +824,7 @@ class ChatService:
                                 content += f"![{img_id}](data:image/jpeg;base64,{b64})\n"
                             
                             if not content:
-                                logger.warning(f"Invalid image data: {data}")
+                                logger.warning(f"Invalid image response: {data}")
                             
                             if content:
                                 chunk = {
